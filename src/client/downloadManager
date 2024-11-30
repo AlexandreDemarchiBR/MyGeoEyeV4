@@ -1,1 +1,211 @@
+import os
+import uuid
+import time
+from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+class DownloadManager:
+    def __init__(self, base_download_path: str = None):
+        """
+        Inicializa o gerenciador de downloads
+
+        Args:
+            base_download_path (str, optional): Caminho base para downloads
+        """
+        # Define diretório de download
+        self.base_download_path = base_download_path or os.path.join(
+            os.path.expanduser('~'), 
+            'Downloads', 
+            'MyGeoEye'
+        )
+        
+        # Cria diretório se não existir
+        os.makedirs(self.base_download_path, exist_ok=True)
+        
+        # Histórico de downloads
+        self.download_history: List[Dict[str, Any]] = []
+    
+    def prepare_download_location(self, image_id: str) -> str:
+        """
+        Prepara caminho para download de imagem
+
+        Args:
+            image_id (str): ID da imagem
+
+        Returns:
+            str: Caminho completo para salvar imagem
+        """
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"{image_id}_{timestamp}_satellite.png"
+        return os.path.join(self.base_download_path, filename)
+    
+    def download_single_image(
+        self, 
+        image_id: str, 
+        image_data: bytes, 
+        timeout: int = 60
+    ) -> Dict[str, Any]:
+        """
+        Realiza download de uma única imagem
+
+        Args:
+            image_id (str): ID da imagem
+            image_data (bytes): Dados da imagem
+            timeout (int, optional): Tempo máximo de download
+
+        Returns:
+            Dict[str, Any]: Informações do download
+        """
+        try:
+            # Inicia contagem de tempo
+            start_time = time.time()
+            
+            # Prepara caminho de download
+            download_path = self.prepare_download_location(image_id)
+            
+            # Salva imagem
+            with open(download_path, 'wb') as f:
+                f.write(image_data)
+            
+            # Calcula tempo de download
+            download_time = time.time() - start_time
+            
+            # Registra informações do download
+            download_info = {
+                'image_id': image_id,
+                'download_path': download_path,
+                'download_time': download_time,
+                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'status': 'success'
+            }
+            
+            self.download_history.append(download_info)
+            return download_info
+        
+        except Exception as e:
+            # Registra falha no download
+            error_info = {
+                'image_id': image_id,
+                'error': str(e),
+                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'status': 'failed'
+            }
+            
+            self.download_history.append(error_info)
+            raise
+    
+    def download_multiple_images(
+        self, 
+        images: List[Dict[str, Any]], 
+        max_concurrent_downloads: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Realiza download de múltiplas imagens em paralelo
+
+        Args:
+            images (List[Dict[str, Any]]): Lista de imagens para download
+            max_concurrent_downloads (int, optional): Máximo de downloads simultâneos
+
+        Returns:
+            List[Dict[str, Any]]: Resultados dos downloads
+        """
+        download_results = []
+        
+        # Usa ThreadPoolExecutor para downloads paralelos
+        with ThreadPoolExecutor(max_workers=max_concurrent_downloads) as executor:
+            # Mapeia futures para downloads
+            futures = {
+                executor.submit(
+                    self.download_single_image, 
+                    img['image_id'], 
+                    img['image_data']
+                ): img['image_id'] 
+                for img in images
+            }
+            
+            # Processa resultados conforme completam
+            for future in as_completed(futures):
+                image_id = futures[future]
+                try:
+                    result = future.result()
+                    download_results.append(result)
+                except Exception as e:
+                    download_results.append({
+                        'image_id': image_id,
+                        'status': 'failed',
+                        'error': str(e)
+                    })
+        
+        return download_results
+    
+    def get_download_history(self) -> List[Dict[str, Any]]:
+        """
+        Recupera histórico de downloads
+
+        Returns:
+            List[Dict[str, Any]]: Histórico de downloads
+        """
+        return self.download_history
+    
+    def clear_download_history(self):
+        """
+        Limpa histórico de downloads
+        """
+        self.download_history.clear()
+    
+    def get_total_download_stats(self) -> Dict[str, Any]:
+        """
+        Calcula estatísticas de downloads
+
+        Returns:
+            Dict[str, Any]: Estatísticas de downloads
+        """
+        successful_downloads = [
+            download for download in self.download_history 
+            if download['status'] == 'success'
+        ]
+        
+        return {
+            'total_downloads': len(self.download_history),
+            'successful_downloads': len(successful_downloads),
+            'failed_downloads': len(self.download_history) - len(successful_downloads),
+            'average_download_time': (
+                sum(download['download_time'] for download in successful_downloads) / 
+                len(successful_downloads) 
+                if successful_downloads else 0
+            )
+        }
+
+# Exemplo de uso
+if __name__ == "__main__":
+    # Inicializa gerenciador de downloads
+    download_manager = DownloadManager()
+    
+    # Exemplo de download de imagens
+    sample_images = [
+        {
+            'image_id': str(uuid.uuid4()),
+            'image_data': b'conteudo_imagem_1'
+        },
+        {
+            'image_id': str(uuid.uuid4()),
+            'image_data': b'conteudo_imagem_2'
+        }
+    ]
+    
+    try:
+        # Download de múltiplas imagens
+        results = download_manager.download_multiple_images(sample_images)
+        
+        # Exibe resultados
+        for result in results:
+            print(f"Download {result.get('image_id')}: {result.get('status')}")
+        
+        # Mostra estatísticas
+        stats = download_manager.get_total_download_stats()
+        print("\nEstatísticas de Download:")
+        for key, value in stats.items():
+            print(f"{key}: {value}")
+    
+    except Exception as e:
+        print(f"Erro nos downloads: {e}")
